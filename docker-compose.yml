@@ -1,0 +1,81 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_HOST_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: ${POSTGRES_HEALTH_INTERVAL}
+      timeout: ${POSTGRES_HEALTH_TIMEOUT}
+      retries: ${POSTGRES_HEALTH_RETRIES}
+    volumes:
+      - bank-postgres-data:/var/lib/postgresql/data
+
+  kafka:
+    image: apache/kafka:4.1.0
+    ports:
+      - "${KAFKA_EXTERNAL_PORT:?set KAFKA_EXTERNAL_PORT}:${KAFKA_EXTERNAL_PORT}"
+    environment:
+      KAFKA_NODE_ID: ${KAFKA_NODE_ID:?set KAFKA_NODE_ID}
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:${KAFKA_INTERNAL_PORT:?set KAFKA_INTERNAL_PORT},EXTERNAL://:${KAFKA_EXTERNAL_PORT},CONTROLLER://:${KAFKA_CONTROLLER_PORT:?set KAFKA_CONTROLLER_PORT}
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:${KAFKA_INTERNAL_PORT},EXTERNAL://localhost:${KAFKA_EXTERNAL_PORT}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: ${KAFKA_NODE_ID}@kafka:${KAFKA_CONTROLLER_PORT}
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: ${KAFKA_REPLICATION_FACTOR:?set KAFKA_REPLICATION_FACTOR}
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: ${KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS:?set KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS}
+
+  kafka-init:
+    image: apache/kafka:4.1.0
+    depends_on:
+      - kafka
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:${KAFKA_INTERNAL_PORT} --list >/dev/null 2>&1; do sleep ${KAFKA_INIT_RETRY_INTERVAL_SECONDS:?set KAFKA_INIT_RETRY_INTERVAL_SECONDS}; done
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:${KAFKA_INTERNAL_PORT} --create --if-not-exists --topic ${KAFKA_RATE_UPDATES_TOPIC:?set KAFKA_RATE_UPDATES_TOPIC} --partitions ${KAFKA_PARTITIONS} --replication-factor ${KAFKA_REPLICATION_FACTOR}
+
+  rates-service:
+    build:
+      context: ./rates-service
+      dockerfile: Dockerfile
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    env_file: .env
+    ports:
+      - "${GRPC_RATES_HOST_PORT}:${GRPC_RATES_INTERNAL_PORT}"
+    environment:
+      KAFKA_BROKERS: kafka:${KAFKA_INTERNAL_PORT}
+      GRPC_ADDR: :${GRPC_RATES_INTERNAL_PORT}
+    restart: on-failure
+
+  bank-service:
+    build:
+      context: ./bank-service
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      rates-service:
+        condition: service_started
+    ports:
+      - "${HTTP_HOST_PORT}:8080"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      KAFKA_BROKERS: kafka:${KAFKA_INTERNAL_PORT}
+      GRPC_RATES_TARGET: rates-service:${GRPC_RATES_INTERNAL_PORT}
+      MIGRATIONS_PATH: /app/migrations
+    restart: on-failure
+
+volumes:
+  bank-postgres-data:

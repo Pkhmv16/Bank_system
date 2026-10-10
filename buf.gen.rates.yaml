@@ -1,0 +1,12 @@
+ version: v2
+plugins:
+  - local: protoc-gen-go
+    out: rates-service/internal/gen
+    opt:
+      - paths=source_relative
+      - Mrates/v1/rates.proto=github.com/evgenypakhomov/bank-system-go/rates-service/internal/gen/rates/v1
+  - local: protoc-gen-go-grpc
+    out: rates-service/internal/gen
+    opt:
+      - paths=source_relative
+      - Mrates/v1/rates.proto=github.com/evgenypakhomov/bank-system-go/rates-service/internal/gen/rates/v1

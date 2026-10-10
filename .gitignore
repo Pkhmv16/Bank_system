@@ -1,0 +1,8 @@
+.env
+.cache/
+bank-service/bin/
+rates-service/bin/
+coverage.out
+*.log
+.idea/
+.vscode/

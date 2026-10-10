@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package rates.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/evgenypakhomov/bank-system-go/bank-service/internal/gen/rates/v1;ratesv1";
+
+service RateService {
+  rpc GetRate(GetRateRequest) returns (GetRateResponse);
+}
+
+message GetRateRequest {
+  string currency = 1;
+}
+
+message GetRateResponse {
+  bool success = 1;
+  string currency = 2;
+  string rate_to_rub = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  string error_message = 5;
+}
